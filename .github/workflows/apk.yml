@@ -9,8 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Zipni ochish
-        run: unzip -o NarjanTurkish.zip
+        with:
+          fetch-depth: 0
+      - name: Eng oxirgi zipni ochish
+        run: |
+          ZIP=$(for f in NarjanTurkish*.zip; do echo "$(git log -1 --format=%ct -- "$f") $f"; done | sort -n | tail -1 | cut -d' ' -f2-)
+          echo "Ishlatilayotgan zip: $ZIP"
+          rm -rf NarjanTurkish
+          unzip -o "$ZIP"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
