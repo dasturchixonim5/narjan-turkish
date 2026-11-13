@@ -764,33 +764,35 @@ const dueMistakes = () => S.mistakes.filter(m => !m.mastered && m.due <= todaySt
 let SAMPLE = null, SAMPLE_TRIED = false;
 async function getSample() { if (SAMPLE || SAMPLE_TRIED) return SAMPLE; SAMPLE_TRIED = true; try { if (window.claude && window.claude.use) SAMPLE = await window.claude.use('sample'); } catch (e) { } return SAMPLE; }
 const AI_SYS = 'Sen Narjan Turkish platformasining turk tili o‘qituvchisisan. Tushuntirishlarni o‘zbek tilida (lotin yozuvi) yoz, turkcha misollarni to‘g‘ri imlo bilan (ç, ş, ğ, ı, İ, ö, ü) yoz. Qisqa va aniq bo‘l.';
-/* AI provayderlar: Claude (sahifa ichida) va Grok (xAI, foydalanuvchi API kaliti bilan) */
-const GKEY = 'narjan_grok_v1';
-function grokCfg() { try { return JSON.parse(lsGet(GKEY) || '{}'); } catch (e) { return {}; } }
-function setGrokCfg(c) { lsSet(GKEY, JSON.stringify(c)); }
+/* AI provayderlar: Claude (sahifa ichida), Groq (bepul) va Grok (xAI) — foydalanuvchi API kaliti bilan */
+const GKEY = 'narjan_grok_v1', QKEY = 'narjan_groq_v1';
+const PROV = { grok: { name: 'Grok', url: 'https://api.x.ai/v1', key: GKEY, model: 'grok-4', vision: null, site: 'console.x.ai' }, groq: { name: 'Groq', url: 'https://api.groq.com/openai/v1', key: QKEY, model: 'llama-3.3-70b-versatile', vision: 'meta-llama/llama-4-scout-17b-16e-instruct', site: 'console.groq.com' } };
+function provCfg(p) { try { return JSON.parse(lsGet(PROV[p].key) || '{}'); } catch (e) { return {}; } }
+function setProvCfg(p, c) { lsSet(PROV[p].key, JSON.stringify(c)); }
+function grokCfg() { return provCfg('grok'); } function setGrokCfg(c) { setProvCfg('grok', c); }
 function aiProvider() { return (S.profile && S.profile.ai) || 'auto'; }
 async function activeAI() {
-  const p = aiProvider(), g = grokCfg();
-  if (p === 'grok') { if (!g.key) throw { code: 'no_grok_key' }; return 'grok'; }
+  const p = aiProvider();
+  if (p === 'grok' || p === 'groq') { if (!provCfg(p).key) throw { code: 'no_key', prov: p }; return p; }
   const s = await getSample();
   if (p === 'claude') { if (!s) throw { code: 'no_ai' }; return 'claude'; }
-  if (s) return 'claude'; if (g.key) return 'grok'; throw { code: 'no_ai' };
+  if (s) return 'claude'; if (provCfg('groq').key) return 'groq'; if (provCfg('grok').key) return 'grok'; throw { code: 'no_ai' };
 }
-function aiName() { const p = aiProvider(), g = grokCfg(); return p === 'grok' ? 'Grok' : p === 'claude' ? 'Claude' : (SAMPLE ? 'Claude' : g.key ? 'Grok' : 'Claude'); }
-async function grokCall(messages, opts = {}) {
-  const g = grokCfg(); if (!g.key) throw { code: 'no_grok_key' };
+function aiName() { const p = aiProvider(); if (PROV[p]) return PROV[p].name; if (p === 'claude') return 'Claude'; return SAMPLE ? 'Claude' : provCfg('groq').key ? 'Groq' : provCfg('grok').key ? 'Grok' : 'Claude'; }
+async function oaCall(p, messages, opts = {}) {
+  const P = PROV[p], g = provCfg(p); if (!g.key) throw { code: 'no_key', prov: p }; if (p === 'grok' && /^gsk_/.test(g.key)) throw { code: 'wrong_prov', prov: p }; if (p === 'groq' && /^xai-/.test(g.key)) throw { code: 'wrong_prov', prov: p };
   let r;
-  try {
-    r = await fetch('https://api.x.ai/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + g.key }, body: JSON.stringify({ model: g.model || 'grok-4', messages, temperature: opts.temperature ?? 0.4, stream: false }) });
-  } catch (e) { throw { code: 'grok_blocked', message: String(e && e.message || e) }; }
-  if (!r.ok) { let m = ''; try { const j = await r.json(); m = (j.error && (j.error.message || j.error)) || j.message || JSON.stringify(j); } catch (e) { m = await r.text().catch(() => ''); } throw { code: r.status === 401 || r.status === 403 ? 'grok_key' : r.status === 404 ? 'grok_model' : r.status === 429 ? 'rate_limited' : 'grok_http', message: `${r.status}: ${String(m).slice(0, 200)}` }; }
+  try { r = await fetch(P.url + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + g.key }, body: JSON.stringify({ model: opts.model || g.model || P.model, messages, temperature: opts.temperature ?? 0.4, stream: false }) }); }
+  catch (e) { throw { code: 'blocked', prov: p, message: String(e && e.message || e) }; }
+  if (!r.ok) { let m = ''; try { const j = await r.json(); m = (j.error && (j.error.message || j.error)) || j.message || JSON.stringify(j); } catch (e) { m = await r.text().catch(() => ''); } throw { code: r.status === 401 || r.status === 403 || (r.status === 400 && /api key/i.test(String(m))) ? 'bad_key' : r.status === 404 ? 'bad_model' : r.status === 429 ? 'rate_limited' : 'http', prov: p, message: `${r.status}: ${String(m).slice(0, 200)}` }; }
   const j = await r.json(); const t = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-  if (typeof t !== 'string') throw { code: 'grok_http', message: 'bo‘sh javob' };
+  if (typeof t !== 'string') throw { code: 'http', prov: p, message: 'bo‘sh javob' };
   return t;
 }
+const grokCall = (m, o) => oaCall('grok', m, o);
 async function ai(prompt, opts = {}) {
   const who = await activeAI();
-  if (who === 'grok') { const t = await grokCall([{ role: 'system', content: AI_SYS }, { role: 'user', content: Array.isArray(prompt) ? prompt.map(m => m.content).join('\n\n') : prompt }]); if (opts.onText) opts.onText({ text: t, delta: t }); return t; }
+  if (PROV[who]) { const t = await oaCall(who, [{ role: 'system', content: AI_SYS }, { role: 'user', content: Array.isArray(prompt) ? prompt.map(m => m.content).join('\n\n') : prompt }]); if (opts.onText) opts.onText({ text: t, delta: t }); return t; }
   const s = await getSample();
   const input = Array.isArray(prompt) ? prompt : AI_SYS + '\n\n' + prompt;
   const r = await s(input, { modelTier: opts.tier || 'default', onText: opts.onText, cache: opts.cache });
@@ -806,7 +808,7 @@ function parseJSONText(text) {
 async function aiJSON(prompt, opts = {}) {
   const who = await activeAI();
   const full = prompt + '\n\nFaqat to‘g‘ri JSON qaytar, boshqa matn, izoh yoki ``` belgisi yozma.';
-  if (who === 'grok') { let last; for (let k = 0; k < 2; k++) { const t = await grokCall([{ role: 'system', content: AI_SYS }, { role: 'user', content: full }], { temperature: 0.3 }); try { return parseJSONText(t); } catch (e) { last = e; } } throw last; }
+  if (PROV[who]) { let last; for (let k = 0; k < 2; k++) { const t = await oaCall(who, [{ role: 'system', content: AI_SYS }, { role: 'user', content: full }], { temperature: 0.3 }); try { return parseJSONText(t); } catch (e) { last = e; } } throw last; }
   const s = await getSample(); const sp = AI_SYS + '\n\n' + full;
   if (s.json) { try { return await s.json(sp, { modelTier: opts.tier || 'default' }); } catch (e) { if (e && (e.code === 'not_granted' || e.code === 'rate_limited')) throw e; } }
   const r = await s(sp, { modelTier: opts.tier || 'default' });
@@ -814,16 +816,16 @@ async function aiJSON(prompt, opts = {}) {
 }
 async function aiVision(prompt, blob) {
   const who = await activeAI();
-  if (who === 'grok') {
+  if (PROV[who]) {
     const url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob); });
-    return grokCall([{ role: 'user', content: [{ type: 'image_url', image_url: { url, detail: 'high' } }, { type: 'text', text: prompt }] }]);
+    return oaCall(who, [{ role: 'user', content: [{ type: 'image_url', image_url: { url } }, { type: 'text', text: prompt }] }], { model: PROV[who].vision || undefined });
   }
   const s = await getSample(); try { const lim = s.limits ? await s.limits() : { images: true }; if (!lim.images) throw { code: 'no_vision' }; } catch (e) { if (e.code === 'no_vision') throw e; }
   return (await s(prompt, { images: [blob], modelTier: 'default' })).text;
 }
 function aiErr(e) {
-  const c = e && e.code;
-  return { no_ai: 'AI hozir mavjud emas. Claude ichida bo‘lmasangiz, Sozlamalar → «AI provayder» bo‘limida Grok API kalitini kiriting. Oflayn funksiyalar ishlashda davom etadi.', no_grok_key: 'Grok tanlangan, lekin API kaliti kiritilmagan: Sozlamalar → «AI provayder».', grok_key: 'Grok API kaliti noto‘g‘ri yoki ruxsati yo‘q. Kalitni console.x.ai da tekshiring.', grok_model: 'Grok modeli topilmadi — Sozlamalarda «Modellarni yuklash» tugmasi bilan mavjud modelni tanlang.', grok_blocked: 'Grok’ga ulanib bo‘lmadi. Claude ichidagi sahifa tashqi serverlarga so‘rov yuborishni bloklaydi — Grok bilan ishlash uchun ilovaning alohida faylini brauzerda oching (yoki internetni tekshiring).', grok_http: 'Grok xatosi: ' + (e && e.message), no_vision: 'Bu AI rasm qabul qilmaydi.', bad_json: 'AI javobi noto‘g‘ri formatda keldi — qayta urinib ko‘ring.', not_granted: 'AI’dan foydalanishga ruxsat berilmadi.', rate_limited: 'So‘rovlar ko‘p — bir daqiqadan so‘ng qayta urinib ko‘ring.' }[c] || ('AI javob bermadi: ' + ((e && e.message) || 'noma’lum xato'));
+  const c = e && e.code, P = PROV[e && e.prov] || { name: 'AI', site: '' };
+  return { no_ai: 'AI hozir mavjud emas. Claude ichida bo‘lmasangiz, Sozlamalar → «AI provayder» bo‘limida Groq (bepul) yoki Grok kalitini kiriting. Oflayn funksiyalar ishlashda davom etadi.', no_key: `${P.name} tanlangan, lekin API kaliti kiritilmagan: Sozlamalar → «AI provayder».`, bad_key: `${P.name} API kaliti noto‘g‘ri yoki bekor qilingan. Kalitni ${P.site} da tekshiring.`, bad_model: `${P.name} modeli topilmadi — Sozlamalarda «Modellarni yuklash» bilan mavjud modelni tanlang.`, blocked: `${P.name}’ga ulanib bo‘lmadi. Claude ichidagi sahifa tashqi serverlarga so‘rovni bloklaydi — ${P.name} ilovada (APK) yoki faylni brauzerda ochganda ishlaydi. Internetni ham tekshiring.`, http: `${P.name} xatosi: ` + (e && e.message), no_vision: 'Bu AI rasm qabul qilmaydi.', wrong_prov: (e && e.prov) === 'grok' ? 'Bu Groq kaliti («gsk_» bilan boshlanadi) — uni Grok maydoniga emas, «Groq (bepul)» maydoniga kiriting va «Groq (bepul)» tugmasini tanlang.' : 'Bu xAI (Grok) kaliti — uni Grok maydoniga kiriting.', bad_json: 'AI javobi noto‘g‘ri formatda keldi — qayta urinib ko‘ring.', not_granted: 'AI’dan foydalanishga ruxsat berilmadi.', rate_limited: 'So‘rovlar ko‘p (limit) — bir daqiqadan so‘ng qayta urinib ko‘ring.' }[c] || ('AI javob bermadi: ' + ((e && e.message) || 'noma’lum xato'));
 }
 /* ===== Ovoz: tinglash va diktovka ===== */
 let TTS = null, TTS_TRIED = false;
@@ -1374,19 +1376,20 @@ function runReview(box, qs, ms) {
 ROUTES.sozlamalar = (v) => {
   const p = S.profile;
   v.innerHTML = head('Sozlamalar', 'Profil, maqsad, mavzu, zaxira') + `<div class="card"><h2>Profil va maqsad</h2><label class="small muted">Ism</label><input id="sn" value="${esc(p.name)}"><div class="grid2" style="margin-top:8px"><div><label class="small muted">Joriy daraja</label><select id="sl">${LEVELS.map(L => `<option ${L === p.level ? 'selected' : ''}>${L}</option>`).join('')}</select></div><div><label class="small muted">Maqsadli daraja</label><select id="st">${LEVELS.map(L => `<option ${L === p.target ? 'selected' : ''}>${L}</option>`).join('')}</select></div><div><label class="small muted">Muddat (oy)</label><input id="sm" type="number" min="1" max="36" value="${p.goalMonths}"></div><div><label class="small muted">Imtihon sanasi</label><input id="sd" type="date" value="${p.examDate || ''}"></div></div><button class="btn" id="ssave" style="margin-top:12px">Saqlash</button></div>
-  <div class="card" id="aicard"><h2>🤖 AI provayder</h2><p class="small muted">Tarjima, yozuvni tekshirish, suhbat, savol tuzish va OCR uchun qaysi AI ishlatilsin.</p>
-   <div class="row">${[['auto', 'Avto (Claude, bo‘lmasa Grok)'], ['claude', 'Claude'], ['grok', 'Grok (xAI)']].map(([k, t]) => `<button class="btn ${(p.ai || 'auto') === k ? '' : 'sec'}" data-ai="${k}">${t}</button>`).join('')}</div>
-   <h3>Grok sozlamalari</h3><label class="small muted">xAI API kaliti (console.x.ai dan olinadi)</label><input id="gk" type="password" autocomplete="off" placeholder="xai-..." value="${esc(grokCfg().key || '')}">
-   <div class="grid2" style="margin-top:8px"><div><label class="small muted">Model</label><input id="gm" list="gml" value="${esc(grokCfg().model || 'grok-4')}"><datalist id="gml"></datalist></div><div class="row" style="align-items:flex-end"><button class="btn sec sm" id="gload">Modellarni yuklash</button><button class="btn sm" id="gsave">Saqlash va tekshirish</button></div></div><div id="gst"></div>
-   <p class="tiny muted">Kalit faqat shu qurilmada saqlanadi: bulutga, zaxira nusxasiga va boshqa joyga yuborilmaydi; faqat api.x.ai ga so‘rov yuborishda ishlatiladi. Grok so‘rovlari xAI hisobingizdan to‘lanadi. Diqqat: claude.ai ichida ochilgan sahifa tashqi serverlarga so‘rovni bloklaydi — u yerda Claude ishlaydi, Grok esa ilovaning alohida faylida (brauzerda ochilganda) ishlaydi.</p></div>
+  <div class="card" id="aicard"><h2>🤖 AI provayder</h2><p class="small muted">Tarjima, yozuvni tekshirish, suhbat, savol tuzish va OCR uchun qaysi AI ishlatilsin. Hozir: <b>${aiName()}</b></p>
+   <div class="row">${[['auto', 'Avto'], ['claude', 'Claude'], ['groq', 'Groq (bepul)'], ['grok', 'Grok (xAI)']].map(([k, t]) => `<button class="btn sm ${(p.ai || 'auto') === k ? '' : 'sec'}" data-ai="${k}">${t}</button>`).join('')}</div>
+   <p class="tiny muted">Avto: Claude ichida — Claude; ilovada — avval Groq, keyin Grok.</p>
+   ${['groq', 'grok'].map(k => `<h3>${PROV[k].name} ${k === 'groq' ? '<span class="pill g">bepul</span>' : '<span class="pill a">pullik</span>'}</h3><label class="small muted">API kaliti (${PROV[k].site} → API Keys${k === 'groq' ? ', «gsk_» bilan boshlanadi' : ', «xai-» bilan boshlanadi'})</label><input id="k_${k}" type="password" autocomplete="off" value="${esc(provCfg(k).key || '')}">
+   <div class="grid2" style="margin-top:8px"><div><label class="small muted">Model</label><input id="m_${k}" list="ml_${k}" value="${esc(provCfg(k).model || PROV[k].model)}"><datalist id="ml_${k}"></datalist></div><div class="row" style="align-items:flex-end"><button class="btn sec sm" data-load="${k}">Modellarni yuklash</button><button class="btn sm" data-check="${k}">Saqlash va tekshirish</button></div></div><div id="st_${k}"></div>`).join('')}
+   <p class="tiny muted">Kalitlar faqat shu qurilmada saqlanadi: bulutga, zaxira nusxasiga va GitHub’ga tushmaydi. Claude ichidagi sahifada tashqi AI bloklanadi — Groq/Grok ilovada (APK) yoki faylni brauzerda ochganda ishlaydi.</p></div>
   <div class="card"><h2>Ko‘rinish</h2><div class="row"><button class="btn ${p.theme !== 'dark' ? '' : 'sec'}" data-th="light">☀️ Yorug‘</button><button class="btn ${p.theme === 'dark' ? '' : 'sec'}" data-th="dark">🌙 Qorong‘i</button></div></div>
   <div class="card"><h2>Ma’lumotlar</h2><p class="small">Progress shu qurilmada saqlanadi${DB ? ' va akkauntingiz orqali bulutga sinxronlanadi (boshqa qurilmada shu sahifani ochsangiz tiklanadi)' : '. Bulut sinxronizatsiyasi bu ko‘rinishda mavjud emas — zaxira faylidan foydalaning'}.</p><div class="row"><button class="btn sec" id="sexp">📋 Zaxira nusxasi</button><button class="btn sec" id="spaste">⬆️ Zaxiradan tiklash</button><label class="btn sec">📄 Fayldan tiklash<input type="file" id="simp" accept=".json,.txt" hidden></label><button class="btn red" id="sres">Hammasini tozalash</button></div></div>
   <div class="card"><h2>Manbalar haqida</h2><p class="small">Asosiy lug‘at: siz yuklagan 412 so‘zlik ro‘yxat (asl ko‘rinishda; ehtimoliy xatolar ⚠ bilan belgilangan). Kitob: «Türkçe 100 Metin» (Babjanova, Tubajanov, 2021) — matnlar o‘zgartirilmagan. Kelishik jadvali: siz yuklagan 35 so‘z. AI yaratgan so‘z, savol va tarjimalar alohida belgilanadi va kitobdan olingan deb ko‘rsatilmaydi.</p></div>`;
   $('#ssave').onclick = () => { Object.assign(p, { name: $('#sn').value.trim() || p.name, level: $('#sl').value, target: $('#st').value, goalMonths: +$('#sm').value || 9, examDate: $('#sd').value }); save(); toast('Saqlandi'); };
   $$('[data-ai]', v).forEach(b => b.onclick = () => { p.ai = b.dataset.ai; save(); route(); });
-  const gsave = () => { setGrokCfg({ key: $('#gk').value.trim(), model: $('#gm').value.trim() || 'grok-4' }); };
-  $('#gload').onclick = async () => { gsave(); const g = grokCfg(); if (!g.key) return toast('Avval API kalitini kiriting'); $('#gst').innerHTML = '<p class="small"><span class="spin"></span></p>'; try { const r = await fetch('https://api.x.ai/v1/models', { headers: { Authorization: 'Bearer ' + g.key } }); if (!r.ok) throw { code: r.status === 401 || r.status === 403 ? 'grok_key' : 'grok_http', message: r.status }; const j = await r.json(); const ids = (j.data || []).map(x => x.id).filter(Boolean); $('#gml').innerHTML = ids.map(i => `<option value="${esc(i)}">`).join(''); $('#gst').innerHTML = `<div class="info small">Mavjud modellar: ${ids.map(esc).join(', ') || '—'}</div>`; } catch (e) { $('#gst').innerHTML = `<div class="note">${aiErr(e.code ? e : { code: 'grok_blocked' })}</div>`; } };
-  $('#gsave').onclick = async () => { gsave(); if (!grokCfg().key) return toast('Kalit saqlandi (bo‘sh)'); $('#gst').innerHTML = '<p class="small"><span class="spin"></span> Grok tekshirilmoqda...</p>'; try { const t = await grokCall([{ role: 'user', content: 'Türkçe tek kelimeyle cevap ver: "salom" ning turkchasi nima?' }]); $('#gst').innerHTML = `<div class="info">✅ Grok ishlayapti. Javob: «${esc(t.slice(0, 80))}»</div>`; } catch (e) { $('#gst').innerHTML = `<div class="note">${aiErr(e)}</div>`; } };
+  const psave = k => { setProvCfg(k, { key: $('#k_' + k).value.trim(), model: $('#m_' + k).value.trim() || PROV[k].model }); };
+  $$('[data-load]', v).forEach(b => b.onclick = async () => { const k = b.dataset.load; psave(k); const g = provCfg(k), st = $('#st_' + k); if (!g.key) return toast('Avval API kalitini kiriting'); st.innerHTML = '<p class="small"><span class="spin"></span></p>'; try { let r; try { r = await fetch(PROV[k].url + '/models', { headers: { Authorization: 'Bearer ' + g.key } }); } catch (e) { throw { code: 'blocked', prov: k }; } if (!r.ok) throw { code: r.status === 401 || r.status === 403 ? 'bad_key' : 'http', prov: k, message: r.status }; const j = await r.json(); const ids = (j.data || []).map(x => x.id).filter(Boolean).sort(); $('#ml_' + k).innerHTML = ids.map(i => `<option value="${esc(i)}">`).join(''); st.innerHTML = `<div class="info small">Mavjud modellar: ${ids.map(esc).join(', ') || '—'}</div>`; } catch (e) { st.innerHTML = `<div class="note">${aiErr(e)}</div>`; } });
+  $$('[data-check]', v).forEach(b => b.onclick = async () => { const k = b.dataset.check; psave(k); const st = $('#st_' + k); if (!provCfg(k).key) return toast('Kalit o‘chirildi'); st.innerHTML = `<p class="small"><span class="spin"></span> ${PROV[k].name} tekshirilmoqda...</p>`; try { const t = await oaCall(k, [{ role: 'user', content: '«Salom» so‘zining turkchasini bitta so‘z bilan yoz.' }]); st.innerHTML = `<div class="info">✅ ${PROV[k].name} ishlayapti. Javob: «${esc(t.slice(0, 80))}»</div>`; if ((p.ai || 'auto') === 'auto' || p.ai === 'claude') { } } catch (e) { st.innerHTML = `<div class="note">${aiErr(e)}</div>`; } });
   $$('[data-th]', v).forEach(b => b.onclick = () => { p.theme = b.dataset.th; save(); applyTheme(); route(); });
   $('#sexp').onclick = () => { const txt = JSON.stringify({ state: S, tr: TRC }); modal(`<h3>Zaxira nusxasi</h3><p class="small muted">Matnni nusxalab, xavfsiz joyga (masalan, Telegram «Saqlangan xabarlar») saqlang. Tiklash uchun shu matnni «Zaxiradan tiklash» oynasiga qo‘ying.</p><textarea id="bkt" readonly style="min-height:160px">${esc(txt)}</textarea><div class="row" style="margin-top:8px"><button class="btn" id="bkc">📋 Nusxalash</button></div>`, (b) => { $('#bkc', b).onclick = () => navigator.clipboard.writeText(txt).then(() => toast('Nusxalandi'), () => { $('#bkt', b).select(); toast('Matnni belgilab, nusxalang'); }); }); };
   $('#spaste').onclick = () => modal(`<h3>Zaxiradan tiklash</h3><textarea id="bki" placeholder="Zaxira matnini shu yerga qo‘ying"></textarea><div class="row" style="margin-top:8px"><button class="btn" id="bko">Tiklash</button></div>`, (b, c) => { $('#bko', b).onclick = () => { try { const d = JSON.parse($('#bki', b).value); S = Object.assign(DEF(), d.state || d); if (d.tr) { TRC = d.tr; lsSet(TRK, JSON.stringify(TRC)); } save(); applyTheme(); c(); toast('Tiklandi'); route(); } catch (er) { toast('Matn noto‘g‘ri'); } }; });
