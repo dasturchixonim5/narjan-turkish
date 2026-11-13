@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Narjan Turkish">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1c1650"/>
+      <stop offset="0.55" stop-color="#3b2a9e"/>
+      <stop offset="1" stop-color="#7b4dff"/>
+    </linearGradient>
+    <linearGradient id="nn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dcd6ff"/>
+    </linearGradient>
+    <linearGradient id="fl" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c8102e"/>
+      <stop offset="1" stop-color="#ef3340"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- N harfi -->
+  <path d="M126 384V128h62l136 168V128h62v256h-60L188 214v170z" fill="url(#nn)"/>
+  <!-- bayroq tasmasi -->
+  <path d="M96 338c70-26 146-30 212-8 44 15 82 13 116-6l-14 52c-36 16-76 18-122 4-62-19-128-16-192 6z" fill="url(#fl)"/>
+  <!-- oy va yulduz -->
+  <circle cx="226" cy="350" r="22" fill="#fff"/>
+  <circle cx="233" cy="350" r="17.5" fill="#d71a33"/>
+  <path d="M262 350l-12.6 4.1 7.8-10.7v13.2l-7.8-10.7z" fill="#fff"/>
+</svg>
